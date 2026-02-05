@@ -50,11 +50,33 @@ MODELS = {
     "gemma-7b": "google/gemma-7b-it",
     "qwen-7b": "Qwen/Qwen-7B-Chat",
     "llama3-8b": "meta-llama/Meta-Llama-3-8B-Instruct",
+    # CPU-only (no GPU needed); small models for testing the pipeline
+    "gpt2": "gpt2",
+    "distilgpt2": "distilgpt2",
 }
 
-# Default: smaller/faster models for testing
-DEFAULT_MODELS = ["phi-2", "mistral-7b"]
-DEFAULT_DATASETS = ["truthfulqa", "wiki_qa"]
+# Models that run on CPU in reasonable time (small; use for --cpu)
+CPU_MODELS = ["gpt2", "distilgpt2"]
+
+# Project: exactly 5 models, 5 datasets (as per proposal)
+PROJECT_MODELS = [
+    "phi-2",
+    "mistral-7b",
+    "llama2-7b",
+    "gemma-7b",
+    "qwen-7b",
+]
+PROJECT_DATASETS = [
+    "truthfulqa",
+    "wiki_qa",
+    "natural_questions",
+    "fever",
+    "squad_v2",
+]
+
+# Default for run.py: use project 5 models, 5 datasets
+DEFAULT_MODELS = PROJECT_MODELS
+DEFAULT_DATASETS = PROJECT_DATASETS
 
 # Generation settings
 GENERATION_CONFIG = {

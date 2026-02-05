@@ -15,6 +15,8 @@ from .config import (
     MODELS,
     DATASETS,
     RESULTS_DIR,
+    CPU_MODELS,
+    DATASETS as DATASETS_CONFIG,
 )
 from .load_datasets import load_dataset_by_name, get_all_dataset_names
 from .load_models import load_model_and_tokenizer
@@ -28,13 +30,14 @@ def run_single_experiment(
     max_samples: int = 100,
     prompt_type: str = "zero_shot",
     use_8bit: bool = True,
+    force_cpu: bool = False,
     output_dir: str = RESULTS_DIR,
     verbose: bool = True,
 ) -> dict:
     """Run one model on one dataset and save results."""
     if verbose:
         print(f"\n{'='*60}")
-        print(f"Model: {model_key} | Dataset: {dataset_name} | n={max_samples}")
+        print(f"Model: {model_key} | Dataset: {dataset_name} | n={max_samples}" + (" [CPU]" if force_cpu else ""))
         print("="*60)
 
     # Load dataset
@@ -42,8 +45,10 @@ def run_single_experiment(
     if not data:
         return {"error": f"No data loaded for {dataset_name}"}
 
-    # Load model
-    model, tokenizer = load_model_and_tokenizer(model_key, use_8bit=use_8bit)
+    # Load model (CPU mode skips 8-bit)
+    model, tokenizer = load_model_and_tokenizer(
+        model_key, use_8bit=use_8bit and not force_cpu, force_cpu=force_cpu
+    )
 
     # Evaluate
     results = run_evaluation(
@@ -78,14 +83,28 @@ def main():
     parser = argparse.ArgumentParser(description="Hallucination Detection Experiments")
     parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS, help="Model keys")
     parser.add_argument("--datasets", nargs="+", default=DEFAULT_DATASETS, help="Dataset names")
-    parser.add_argument("--max_samples", type=int, default=50, help="Max samples per dataset")
+    parser.add_argument("--max_samples", type=int, default=None, help="Max samples per dataset (default 50; use --full for config max, e.g. 500)")
+    parser.add_argument("--full", action="store_true", help="Use full dataset size per config (500 samples per dataset)")
     parser.add_argument("--prompt_type", choices=["zero_shot", "few_shot"], default="zero_shot")
     parser.add_argument("--no_8bit", action="store_true", help="Disable 8-bit quantization")
     parser.add_argument("--output_dir", default=RESULTS_DIR)
     parser.add_argument("--all", action="store_true", help="Use all models and datasets (slower)")
+    parser.add_argument("--cpu", action="store_true", help="CPU only: use small models (gpt2, distilgpt2), no GPU")
     args = parser.parse_args()
 
-    if args.all:
+    # Resolve max_samples: --full => use config max per dataset; else default 50
+    if args.full:
+        max_samples = None  # let load_dataset_by_name use config max (500)
+    else:
+        max_samples = args.max_samples if args.max_samples is not None else 50
+
+    force_cpu = args.cpu
+    if force_cpu:
+        model_list = CPU_MODELS
+        dataset_list = args.datasets
+        if args.models != DEFAULT_MODELS:
+            model_list = [m for m in args.models if m in CPU_MODELS] or CPU_MODELS
+    elif args.all:
         model_list = list(MODELS.keys())
         dataset_list = get_all_dataset_names()
     else:
@@ -99,12 +118,17 @@ def main():
                 print(f"Skipping unknown dataset: {dataset_name}")
                 continue
             try:
+                # Per-dataset max when --full: use config max for this dataset
+                n = max_samples
+                if n is None and dataset_name in DATASETS_CONFIG:
+                    n = DATASETS_CONFIG[dataset_name].get("max_samples", 500)
                 res = run_single_experiment(
                     model_key=model_key,
                     dataset_name=dataset_name,
-                    max_samples=args.max_samples,
+                    max_samples=n,
                     prompt_type=args.prompt_type,
                     use_8bit=not args.no_8bit,
+                    force_cpu=force_cpu,
                     output_dir=args.output_dir,
                 )
                 all_results.append(res)

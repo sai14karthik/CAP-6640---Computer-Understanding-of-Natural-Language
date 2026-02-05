@@ -13,30 +13,37 @@ def load_model_and_tokenizer(
     model_key: str,
     use_8bit: bool = True,
     device_map: Optional[str] = "auto",
+    force_cpu: bool = False,
 ) -> tuple:
     """
     Load model and tokenizer by config key.
-    use_8bit: use 8-bit quantization to reduce memory (recommended for 7B+ on consumer GPU).
+    use_8bit: use 8-bit quantization to reduce memory (GPU only).
+    force_cpu: load on CPU (no GPU); use with small models like gpt2, distilgpt2.
     """
     model_id = MODELS.get(model_key)
     if not model_id:
         raise ValueError(f"Unknown model: {model_key}. Choose from {list(MODELS.keys())}")
 
+    on_cpu = force_cpu or not torch.cuda.is_available()
     kwargs = {}
-    if use_8bit and torch.cuda.is_available():
-        kwargs["load_in_8bit"] = True
-        kwargs["device_map"] = device_map
+    if on_cpu:
+        kwargs["device_map"] = None
+        kwargs["torch_dtype"] = torch.float32
     else:
-        kwargs["device_map"] = device_map if torch.cuda.is_available() else None
+        if use_8bit:
+            kwargs["load_in_8bit"] = True
+            kwargs["device_map"] = device_map
+        else:
+            kwargs["device_map"] = device_map
+        kwargs["torch_dtype"] = torch.float16
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         trust_remote_code=True,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         **kwargs,
     )
-    if not kwargs.get("load_in_8bit") and model.device.type == "cpu":
+    if on_cpu or (hasattr(model, "device") and model.device.type == "cpu"):
         model = model.to("cpu")
     return model, tokenizer
 
@@ -57,10 +64,11 @@ def generate_answer(
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
     gen_cfg = {
         "max_new_tokens": max_new_tokens,
-        "temperature": temperature,
         "do_sample": do_sample,
         "pad_token_id": tokenizer.pad_token_id,
     }
+    if do_sample:
+        gen_cfg["temperature"] = temperature
     with torch.no_grad():
         out = model.generate(**inputs, **gen_cfg)
     # Decode only the generated part
