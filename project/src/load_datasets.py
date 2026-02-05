@@ -1,0 +1,118 @@
+"""
+Load and preprocess factual QA datasets for hallucination evaluation.
+"""
+
+from typing import List, Dict, Any, Optional
+from datasets import load_dataset, Dataset
+from .config import DATASETS
+from .utils import normalize_answer
+
+
+def _get_answer_text(item: Any, key: str, dataset_name: str) -> str:
+    """Extract answer text from dataset-specific format."""
+    val = item.get(key)
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, list):
+        if not val:
+            return ""
+        # SQuAD: list of dicts with 'text'
+        if isinstance(val[0], dict) and "text" in val[0]:
+            return val[0]["text"].strip()
+        if isinstance(val[0], str):
+            return val[0].strip()
+    if isinstance(val, dict) and "text" in val:
+        return val["text"].strip()
+    return str(val).strip()
+
+
+def load_truthfulqa(max_samples: Optional[int] = 500) -> List[Dict[str, str]]:
+    """Load TruthfulQA (generation config)."""
+    ds = load_dataset("truthful_qa", "generation", split="validation", trust_remote_code=True)
+    rows = []
+    for i, item in enumerate(ds):
+        if max_samples and i >= max_samples:
+            break
+        q = item.get("question", "")
+        # best_answer or correct_answers
+        ans = item.get("best_answer") or (item.get("correct_answers") or [""])[0]
+        if isinstance(ans, list):
+            ans = ans[0] if ans else ""
+        rows.append({"question": q, "answer": ans, "dataset": "truthfulqa"})
+    return rows
+
+
+def load_wiki_qa(max_samples: Optional[int] = 500) -> List[Dict[str, str]]:
+    """Load WikiQA."""
+    ds = load_dataset("wiki_qa", split="test", trust_remote_code=True)
+    rows = []
+    seen_questions = set()
+    for i, item in enumerate(ds):
+        if max_samples and len(rows) >= max_samples:
+            break
+        q = item.get("question", "").strip()
+        if q in seen_questions:
+            continue
+        seen_questions.add(q)
+        ans = item.get("answer", "")
+        if isinstance(ans, list):
+            ans = ans[0] if ans else ""
+        rows.append({"question": q, "answer": str(ans).strip(), "dataset": "wiki_qa"})
+    return rows
+
+
+def load_squad_v2(max_samples: Optional[int] = 500) -> List[Dict[str, str]]:
+    """Load SQuAD 2.0 (with unanswerable questions)."""
+    ds = load_dataset("squad_v2", split="validation", trust_remote_code=True)
+    rows = []
+    for i, item in enumerate(ds):
+        if max_samples and i >= max_samples:
+            break
+        q = item.get("question", "")
+        answers = item.get("answers", {})
+        if answers and answers.get("text"):
+            ans = answers["text"][0]
+        else:
+            ans = ""  # unanswerable
+        rows.append({"question": q, "answer": ans, "dataset": "squad_v2", "context": item.get("context", "")})
+    return rows
+
+
+def load_dataset_by_name(name: str, max_samples: Optional[int] = None) -> List[Dict[str, str]]:
+    """Load a dataset by config name."""
+    cfg = DATASETS.get(name)
+    if not cfg:
+        raise ValueError(f"Unknown dataset: {name}. Choose from {list(DATASETS.keys())}")
+    n = max_samples or cfg.get("max_samples")
+
+    if name == "truthfulqa":
+        return load_truthfulqa(n)
+    if name == "wiki_qa":
+        return load_wiki_qa(n)
+    if name == "squad_v2":
+        return load_squad_v2(n)
+
+    # Generic load for others
+    hf_id = cfg["hf_id"]
+    config = cfg.get("config")
+    q_key = cfg["question_key"]
+    a_key = cfg["answer_key"]
+    try:
+        ds = load_dataset(hf_id, config, split="validation", trust_remote_code=True)
+    except Exception:
+        ds = load_dataset(hf_id, split="train", trust_remote_code=True)
+    rows = []
+    for i, item in enumerate(ds):
+        if n and i >= n:
+            break
+        q = item.get(q_key, "")
+        ans = _get_answer_text(item, a_key, name)
+        rows.append({"question": str(q).strip(), "answer": ans, "dataset": name})
+    return rows
+
+
+def get_all_dataset_names() -> List[str]:
+    """Return list of configured dataset names."""
+    return list(DATASETS.keys())
